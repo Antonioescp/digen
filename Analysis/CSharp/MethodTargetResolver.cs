@@ -30,22 +30,7 @@ public sealed class MethodTargetResolver(Solution solution)
         var typeName = typeAndMethod[..lastDot];
         var methodName = typeAndMethod[(lastDot + 1)..];
 
-        INamedTypeSymbol? matchedType = null;
-
-        foreach (var project in solution.Projects)
-        {
-            var compilation = await project.GetCompilationAsync();
-            if (compilation is null) continue;
-
-            foreach (var type in EnumerateNamedTypes(compilation.GlobalNamespace))
-            {
-                if (type.ToDisplayString() != typeName) continue;
-                matchedType = type;
-                break;
-            }
-
-            if (matchedType is not null) break;
-        }
+        var matchedType = await SolutionTypeLookup.FindTypeAsync(solution, typeName);
 
         if (matchedType is null)
         {
@@ -107,28 +92,4 @@ public sealed class MethodTargetResolver(Solution solution)
 
     private static string DescribeCandidates(IEnumerable<IMethodSymbol> candidates) =>
         "Candidates:\n" + string.Join('\n', candidates.Select(c => "  " + c.ToDisplayString()));
-
-    private static IEnumerable<INamedTypeSymbol> EnumerateNamedTypes(INamespaceSymbol ns)
-    {
-        foreach (var type in ns.GetTypeMembers())
-        {
-            yield return type;
-            foreach (var nested in EnumerateNestedTypes(type))
-                yield return nested;
-        }
-
-        foreach (var child in ns.GetNamespaceMembers())
-        foreach (var type in EnumerateNamedTypes(child))
-            yield return type;
-    }
-
-    private static IEnumerable<INamedTypeSymbol> EnumerateNestedTypes(INamedTypeSymbol type)
-    {
-        foreach (var nested in type.GetTypeMembers())
-        {
-            yield return nested;
-            foreach (var grandchild in EnumerateNestedTypes(nested))
-                yield return grandchild;
-        }
-    }
 }

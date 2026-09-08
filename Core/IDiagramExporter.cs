@@ -1,19 +1,17 @@
 namespace digen_2.Core;
 
 /// <summary>
-/// Renders a <see cref="CallGraphNode"/> tree as a diagram in some text
-/// format (PlantUML, Mermaid, ...). Implement this to add another output
-/// format - it never sees language-specific symbols, only the generic
-/// call graph model.
+/// Renders diagram data in some text format (PlantUML, Mermaid, ...).
+/// Implement this (plus one capability interface per diagram kind it
+/// supports, e.g. <see cref="ISequenceDiagramExporter"/>) to add another
+/// output format. Exporters never see language-specific symbols, only the
+/// generic domain model each capability interface takes.
 /// </summary>
 public interface IDiagramExporter
 {
     /// <summary>Short identifier used to select this exporter via --format (e.g. "plantuml").</summary>
     string Id { get; }
 
-    /// <summary>Renders a full outgoing call tree (root = target method, children = what it calls) as one diagram.</summary>
-    string RenderOutgoing(CallGraphNode root);
-
-    /// <summary>Renders one chronological call chain from an incoming call hierarchy - entry point first, target last - as one diagram.</summary>
-    string RenderIncomingPath(IReadOnlyList<CallGraphNode> chronologicalChain, int pathIndex, int pathCount);
+    /// <summary>Which diagram kinds this exporter can render. Each one listed here must be backed by the matching capability interface (e.g. Sequence -> ISequenceDiagramExporter).</summary>
+    IReadOnlyCollection<DiagramKind> SupportedKinds { get; }
 }

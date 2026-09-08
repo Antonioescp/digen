@@ -9,7 +9,8 @@ return await RunAsync(args);
 
 // Composition root: register available analyzers/exporters here. Adding a
 // new language (e.g. Java) or diagram format (e.g. Mermaid) means writing an
-// ICodeAnalyzer / IDiagramExporter implementation and adding one line below.
+// ICodeAnalyzer / IDiagramExporter implementation (plus one capability
+// interface per DiagramKind it supports) and adding one line below.
 static IReadOnlyList<ICodeAnalyzer> Analyzers() => [new CSharpAnalyzer()];
 static IReadOnlyList<IDiagramExporter> Exporters() => [new PlantUmlExporter()];
 
@@ -56,14 +57,34 @@ static async Task<int> RunAsync(string[] args)
         return 1;
     }
 
-    return await GenerateAsync(options, analyzer, exporter);
+    if (!analyzer.SupportedKinds.Contains(options.Kind))
+    {
+        Console.Error.WriteLine(
+            $"Analyzer '{analyzer.Id}' doesn't support --kind {FormatKind(options.Kind)}. Supported: {string.Join(", ", analyzer.SupportedKinds.Select(FormatKind))}");
+        return 1;
+    }
+
+    if (!exporter.SupportedKinds.Contains(options.Kind))
+    {
+        Console.Error.WriteLine(
+            $"Format '{exporter.Id}' doesn't support --kind {FormatKind(options.Kind)}. Supported: {string.Join(", ", exporter.SupportedKinds.Select(FormatKind))}");
+        return 1;
+    }
+
+    return options.Kind switch
+    {
+        DiagramKind.Class => await GenerateClassDiagramAsync(options, (IClassDiagramAnalyzer)analyzer, (IClassDiagramExporter)exporter),
+        _ => await GenerateSequenceDiagramAsync(options, (ISequenceDiagramAnalyzer)analyzer, (ISequenceDiagramExporter)exporter),
+    };
 }
 
-static async Task<int> GenerateAsync(CliOptions options, ICodeAnalyzer analyzer, IDiagramExporter exporter)
+static string FormatKind(DiagramKind kind) => kind.ToString().ToLowerInvariant();
+
+static async Task<int> GenerateSequenceDiagramAsync(CliOptions options, ISequenceDiagramAnalyzer analyzer, ISequenceDiagramExporter exporter)
 {
     var request = new CallGraphRequest(
         options.SolutionPath,
-        options.TargetMethod,
+        options.Target,
         options.ParamTypes,
         options.Direction,
         options.MaxDepth,
@@ -84,7 +105,22 @@ static async Task<int> GenerateAsync(CliOptions options, ICodeAnalyzer analyzer,
     return 0;
 }
 
-static List<string> RenderIncoming(CallGraphNode root, IDiagramExporter exporter)
+static async Task<int> GenerateClassDiagramAsync(CliOptions options, IClassDiagramAnalyzer analyzer, IClassDiagramExporter exporter)
+{
+    var request = new ClassDiagramRequest(options.SolutionPath, options.Target, options.MaxDepth);
+
+    var result = await analyzer.AnalyzeAsync(request);
+    if (!result.Success)
+    {
+        Console.Error.WriteLine(result.ErrorMessage);
+        return 1;
+    }
+
+    WriteDiagrams([exporter.Render(result.Model!)], options.OutputPath);
+    return 0;
+}
+
+static List<string> RenderIncoming(CallGraphNode root, ISequenceDiagramExporter exporter)
 {
     var paths = root.EnumeratePaths();
     Console.Error.WriteLine($"Found {paths.Count} call chain(s) reaching the target method.");
