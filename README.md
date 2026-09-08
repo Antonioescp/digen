@@ -1,11 +1,11 @@
 # digen-2
 
-Generates diagrams (PlantUML today) from a codebase's real semantics, computed with Roslyn against a C# solution (not a regex/text scan). Point it at a `.sln`/`.slnx` and a target, and it will generate one of two kinds of diagram:
+Generates diagrams (PlantUML or Mermaid) from a codebase's real semantics, computed with Roslyn against a C# solution (not a regex/text scan). Point it at a `.sln`/`.slnx` and a target, and it will generate one of two kinds of diagram:
 
 - **sequence** (default) — walk **outward** from a target method to show what it calls, recursively, or walk **inward** to show how the method is reached from its callers, up to entry points, like an IDE's "Call Hierarchy: Incoming Calls" view.
 - **class** — starting from a target type, show it and the types it's related to (base type, implemented interfaces, and types referenced by its fields/properties/method signatures), with their members and the relationships between them.
 
-The source-language analysis, the diagram kind, and the diagram output format are all pluggable behind interfaces (see [Architecture](#architecture)) — C#/Roslyn, sequence/class, and PlantUML are the first implementations, not the only ones the tool is built for.
+The source-language analysis, the diagram kind, and the diagram output format are all pluggable behind interfaces (see [Architecture](#architecture)) — C#/Roslyn, sequence/class, and PlantUML/Mermaid are the current implementations, not the only ones the tool is built for.
 
 ## Requirements
 
@@ -54,7 +54,7 @@ The target's shape depends on `--kind`:
 | `-k, --kind <kind>` | `sequence` (default): a call graph, rooted at a target method. `class`: types, members, and relationships (inheritance, implementation, association), rooted at a target type. |
 | `-r, --direction <dir>` | Sequence only. `outgoing` (default): what does the target method call, walked recursively. `incoming`: who calls the target method, walked up to entry points. Because a sequence diagram is one flow through time, each distinct call chain reaching the target is emitted as its own diagram. |
 | `-l, --language <id>` | Analyzer to use (default: auto-detected from the solution file's extension). Currently just `csharp`. |
-| `-f, --format <id>` | Diagram format to export (default: `plantuml`). |
+| `-f, --format <id>` | Diagram format to export (default: `plantuml`). Also `mermaid`. |
 | `-p, --params <types>` | Sequence only. Comma-separated parameter type names to disambiguate an overloaded method (alternative to the `(types)` suffix). |
 | `-d, --depth <n>` | Maximum graph depth to follow (default: `8`). |
 | `-o, --output <path>` | Write the diagram to a file instead of stdout. With `--direction incoming` and more than one call chain, each diagram is written next to this path with an inserted index, e.g. `out.puml` → `out.1.puml`, `out.2.puml`, ... |
@@ -93,7 +93,13 @@ Disambiguate an overload and drop framework/library noise:
 dotnet run -- MySolution.sln MyApp.Services.OrderService.PlaceOrder(int,decimal) --no-external
 ```
 
-Render the resulting `.puml` file with any PlantUML renderer (the [PlantUML VS Code extension](https://marketplace.visualstudio.com/items?itemName=jebbs.plantuml), the [online server](https://www.plantuml.com/plantuml/uml/), or `plantuml.jar`).
+Same class diagram, as Mermaid instead of PlantUML:
+
+```
+dotnet run -- MySolution.sln MyApp.Services.OrderService --kind class --format mermaid
+```
+
+Render the resulting `.puml` file with any PlantUML renderer (the [PlantUML VS Code extension](https://marketplace.visualstudio.com/items?itemName=jebbs.plantuml), the [online server](https://www.plantuml.com/plantuml/uml/), or `plantuml.jar`). Render a `--format mermaid` result with the [Mermaid Live Editor](https://mermaid.live/), a `` ```mermaid `` fenced block in Markdown (GitHub, GitLab, and most editors render these inline), or the [Mermaid VS Code extension](https://marketplace.visualstudio.com/items?itemName=bierner.markdown-mermaid).
 
 ## Architecture
 
@@ -121,11 +127,20 @@ Analysis/CSharp/              ICodeAnalyzer implementation, built on Roslyn
   CallableMethodMapper.cs        IMethodSymbol -> CallableMethod
   ClassDiagramBuilder.cs         BFS over type relations (base type, interfaces, member types)
 
+Diagrams/TypeAliasRegistry.cs shared by every exporter: stable per-diagram entity aliasing
+                               (raw labels only - each renderer applies its own escaping)
+
 Diagrams/PlantUml/            IDiagramExporter implementation, implements both exporter capabilities
   PlantUmlExporter.cs            thin dispatcher to the two renderers below
   PlantUmlSequenceRenderer.cs    CallGraphNode -> PlantUML sequence diagram
   PlantUmlClassDiagramRenderer.cs ClassDiagramModel -> PlantUML class diagram
-  TypeAliasRegistry.cs           shared: stable per-diagram entity aliasing
+  PlantUmlText.cs                PlantUML-specific escaping/signature formatting
+
+Diagrams/Mermaid/              IDiagramExporter implementation, implements both exporter capabilities
+  MermaidExporter.cs             thin dispatcher to the two renderers below
+  MermaidSequenceRenderer.cs     CallGraphNode -> Mermaid sequence diagram
+  MermaidClassDiagramRenderer.cs ClassDiagramModel -> Mermaid class diagram
+  MermaidText.cs                 Mermaid-specific escaping/signature formatting
 
 Program.cs                    composition root: lists the available analyzers/exporters,
                                picks one of each by --language/--format (or by the solution
@@ -133,7 +148,7 @@ Program.cs                    composition root: lists the available analyzers/ex
                                and drives the CLI
 ```
 
-`Program.cs` and the CLI only ever see the `Core` interfaces and domain models — nothing in that path knows about Roslyn or PlantUML syntax specifically.
+`Program.cs` and the CLI only ever see the `Core` interfaces and domain models — nothing in that path knows about Roslyn, PlantUML, or Mermaid syntax specifically.
 
 ### Why "kind" is a capability interface, not a flag on one big interface
 
@@ -162,22 +177,25 @@ public sealed class JavaAnalyzer : ISequenceDiagramAnalyzer
 
 `AnalyzeAsync` resolves the target method with whatever parser/model fits the language, walks its calls (or callers, per `request.Direction`), and returns a `CallGraphNode` tree built from `CallableMethod` values — the same generic shape the C# analyzer produces. Then register it in `Program.cs`'s `Analyzers()` list. Every exporter that supports `Sequence` works with it immediately, since exporters never see language-specific symbols.
 
-### Adding a diagram format (e.g. Mermaid)
+### Adding a diagram format (e.g. GraphViz DOT)
 
-Implement `IDiagramExporter` plus whichever capability interfaces it supports in a new `Diagrams/Mermaid/MermaidExporter.cs`:
+`Diagrams/Mermaid/` is a complete second `IDiagramExporter` and the reference example to copy: implement `IDiagramExporter` plus whichever capability interfaces you support in a new `Diagrams/Dot/DotExporter.cs`:
 
 ```csharp
-public sealed class MermaidExporter : ISequenceDiagramExporter, IClassDiagramExporter
+public sealed class DotExporter : ISequenceDiagramExporter, IClassDiagramExporter
 {
-    public string Id => "mermaid";
+    public string Id => "dot";
     public IReadOnlyCollection<DiagramKind> SupportedKinds { get; } = [DiagramKind.Sequence, DiagramKind.Class];
     public string RenderOutgoing(CallGraphNode root) { /* ... */ }
     public string RenderIncomingPath(IReadOnlyList<CallGraphNode> chronologicalChain, int pathIndex, int pathCount) { /* ... */ }
     public string Render(ClassDiagramModel model) { /* ... */ }
+
+    // Override only if this format's multi-diagram-to-stdout separator isn't a PlantUML-style "' text" comment.
+    public string FormatComment(string text) => $"// {text}";
 }
 ```
 
-Register it in `Program.cs`'s `Exporters()` list, then select it with `--format mermaid`. Every analyzer that supports the requested kind produces output it can render.
+Register it in `Program.cs`'s `Exporters()` list, then select it with `--format dot`. Every analyzer that supports the requested kind produces output it can render.
 
 ## How the C# analyzer resolves calls (sequence diagrams)
 
@@ -189,3 +207,9 @@ Register it in `Program.cs`'s `Exporters()` list, then select it with `--format 
 ## How the C# analyzer builds class diagrams
 
 Starting at the target type, it breadth-first walks: the base type (if not `object`), implemented interfaces, and the types of fields, properties, method parameters, and return types — unwrapping generics and arrays, so `List<OrderItem> Items` links to `OrderItem` even though `List<T>` itself is a BCL type with no source. Only types with source in the solution are included or expanded further; BCL/NuGet types are invisible to this walk (they'd add noise without adding a diagram-relevant node). The walk is capped by `--depth` and by an internal cap of 40 types.
+
+## Format notes
+
+- **PlantUML** sequence diagrams use a "message from outside" arrow (`[->`) for the diagram's entry point, since PlantUML supports it directly.
+- **Mermaid** has no such construct, so the entry point is rendered as a self-message on the root participant instead (`P0->>P0: PlaceOrder(...)`) — visually the same idea (a call originating outside the diagram), expressed the way Mermaid diagrams commonly do it. Mermaid sequence diagrams also carry their title as YAML frontmatter (`---\ntitle: "..."\n---`) rather than PlantUML's `title` keyword.
+- Both formats render the same underlying `CallGraphNode`/`ClassDiagramModel`, so a diagram's *content* (which calls, notes, members, relations are shown) is identical between `--format plantuml` and `--format mermaid` — only the syntax differs.

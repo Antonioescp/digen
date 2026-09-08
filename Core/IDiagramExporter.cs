@@ -14,4 +14,7 @@ public interface IDiagramExporter
 
     /// <summary>Which diagram kinds this exporter can render. Each one listed here must be backed by the matching capability interface (e.g. Sequence -> ISequenceDiagramExporter).</summary>
     IReadOnlyCollection<DiagramKind> SupportedKinds { get; }
+
+    /// <summary>Formats a line of free text as a comment in this format - used to separate multiple diagrams printed to stdout.</summary>
+    string FormatComment(string text) => $"' {text}";
 }

@@ -1,10 +1,12 @@
 using digen_2.Core;
 
-namespace digen_2.Diagrams.PlantUml;
+namespace digen_2.Diagrams;
 
-/// <summary>Assigns stable PlantUML entity aliases to types, qualifying
-/// the display label only when two distinct types share a simple name.
-/// Shared between the sequence and class diagram renderers.</summary>
+/// <summary>Assigns stable, format-neutral entity aliases (P0, P1, ...) to
+/// types, qualifying the display label only when two distinct types share a
+/// simple name. Shared by every diagram exporter/renderer - the label
+/// returned is raw text; each renderer applies its own format-specific
+/// escaping before emitting it.</summary>
 internal sealed class TypeAliasRegistry
 {
     private readonly Dictionary<string, string> _aliases = new();
@@ -32,9 +34,10 @@ internal sealed class TypeAliasRegistry
     /// <summary>The alias for a type already registered, or null if it never was.</summary>
     public string? TryGetAlias(string fullName) => _aliases.GetValueOrDefault(fullName);
 
+    /// <summary>The raw (un-escaped) display label for a type: its simple name, or its full name if another registered type shares that simple name.</summary>
     public string Label(string fullName, string name)
     {
         var collision = _order.Any(t => t.FullName != fullName && t.Name == name);
-        return PlantUmlText.Sanitize(collision ? fullName : name);
+        return collision ? fullName : name;
     }
 }

@@ -1,5 +1,6 @@
 using System.Text;
 using digen_2.Core;
+using digen_2.Diagrams;
 
 namespace digen_2.Diagrams.PlantUml;
 
@@ -138,7 +139,7 @@ internal static class PlantUmlSequenceRenderer
     {
         foreach (var (fullName, name) in registry.Types)
         {
-            sb.AppendLine($"participant \"{registry.Label(fullName, name)}\" as {registry.Alias(fullName, name)}");
+            sb.AppendLine($"participant \"{PlantUmlText.Sanitize(registry.Label(fullName, name))}\" as {registry.Alias(fullName, name)}");
         }
     }
 }

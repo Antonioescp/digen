@@ -2,10 +2,10 @@ using System.Text;
 using digen_2.Core;
 using digen_2.Diagrams;
 
-namespace digen_2.Diagrams.PlantUml;
+namespace digen_2.Diagrams.Mermaid;
 
-/// <summary>Renders a ClassDiagramModel as a PlantUML class diagram.</summary>
-internal static class PlantUmlClassDiagramRenderer
+/// <summary>Renders a ClassDiagramModel as a Mermaid class diagram.</summary>
+internal static class MermaidClassDiagramRenderer
 {
     public static string Render(ClassDiagramModel model)
     {
@@ -13,9 +13,7 @@ internal static class PlantUmlClassDiagramRenderer
         foreach (var type in model.Types) registry.Register(type.FullName, type.Name);
 
         var sb = new StringBuilder();
-        sb.AppendLine("@startuml");
-        sb.AppendLine("skinparam classAttributeIconSize 0");
-        sb.AppendLine();
+        sb.AppendLine("classDiagram");
 
         foreach (var type in model.Types)
         {
@@ -34,42 +32,42 @@ internal static class PlantUmlClassDiagramRenderer
                 TypeRelationKind.Implementation => "..|>",
                 _ => "-->",
             };
-            sb.AppendLine($"{fromAlias} {arrow} {toAlias}");
+            sb.AppendLine($"    {fromAlias} {arrow} {toAlias}");
         }
 
-        sb.AppendLine("@enduml");
         return sb.ToString();
     }
 
     private static void WriteType(ClassDiagramType type, TypeAliasRegistry registry, StringBuilder sb)
     {
         var alias = registry.Alias(type.FullName, type.Name);
-        var label = PlantUmlText.Sanitize(registry.Label(type.FullName, type.Name));
-        var keyword = type.Shape switch
+        var label = MermaidText.Sanitize(registry.Label(type.FullName, type.Name));
+        var stereotype = type.Shape switch
         {
             TypeShape.Interface => "interface",
-            TypeShape.Enum => "enum",
-            _ => "class",
+            TypeShape.Enum => "enumeration",
+            TypeShape.Record => "record",
+            TypeShape.Struct => "struct",
+            _ => null,
         };
 
-        sb.AppendLine($"{keyword} \"{label}\" as {alias} {{");
+        sb.AppendLine($"    class {alias}[\"{label}\"] {{");
+
+        if (stereotype is not null)
+        {
+            sb.AppendLine($"        <<{stereotype}>>");
+        }
 
         foreach (var field in type.Fields)
         {
-            sb.AppendLine($"  {PlantUmlText.Sanitize(field.Signature)}");
-        }
-
-        if (type.Fields.Count > 0 && type.Methods.Count > 0)
-        {
-            sb.AppendLine("  --");
+            sb.AppendLine($"        {MermaidText.Sanitize(field.Signature)}");
         }
 
         foreach (var method in type.Methods)
         {
-            sb.AppendLine($"  {PlantUmlText.Sanitize(method.Signature)}");
+            sb.AppendLine($"        {MermaidText.Sanitize(method.Signature)}");
         }
 
-        sb.AppendLine("}");
-        sb.AppendLine();
+        sb.AppendLine("    }");
     }
 }
