@@ -1,15 +1,8 @@
+using digen_2.Core;
+
 namespace digen_2.Cli;
 
 public sealed class CliArgumentException(string message) : Exception(message);
-
-public enum CallDirection
-{
-    /// <summary>What does the target method call? (default)</summary>
-    Outgoing,
-
-    /// <summary>Who calls the target method, up to entry points? One diagram per call chain.</summary>
-    Incoming,
-}
 
 public sealed class CliOptions
 {
@@ -20,11 +13,16 @@ public sealed class CliOptions
     public string? OutputPath { get; init; }
     public bool IncludeExternalCalls { get; init; } = true;
     public CallDirection Direction { get; init; } = CallDirection.Outgoing;
+
+    /// <summary>--language value, or null to auto-detect from the solution path's extension.</summary>
+    public string? Language { get; init; }
+
+    public string Format { get; init; } = "plantuml";
     public bool ShowHelp { get; init; }
 
     public const string Usage =
         """
-        digen-2 - Generate PlantUML sequence diagrams from a C# call graph
+        digen-2 - Generate call-graph diagrams from a codebase
 
         Usage:
           digen-2 <solution.sln> <Namespace.Type.Method> [options]
@@ -44,6 +42,9 @@ public sealed class CliOptions
                                     one flow through time, each distinct call chain
                                     reaching the target is emitted as its own
                                     diagram.
+          -l, --language <id>      Analyzer to use (default: auto-detected from the
+                                    solution file's extension), e.g. 'csharp'.
+          -f, --format <id>        Diagram format to export (default: plantuml).
           -p, --params <types>     Comma-separated parameter type names used to
                                     disambiguate an overloaded method (alternative
                                     to the (types) suffix above).
@@ -72,6 +73,8 @@ public sealed class CliOptions
         string? output = null;
         var includeExternal = true;
         var direction = CallDirection.Outgoing;
+        string? language = null;
+        var format = "plantuml";
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -105,6 +108,14 @@ public sealed class CliOptions
                         _ => throw new CliArgumentException(
                             $"Invalid value for --direction: '{dir}'. Expected 'outgoing' or 'incoming'."),
                     };
+                    break;
+                case "-l":
+                case "--language":
+                    language = RequireValue(args, ref i, "--language");
+                    break;
+                case "-f":
+                case "--format":
+                    format = RequireValue(args, ref i, "--format");
                     break;
                 default:
                     positional.Add(args[i]);
@@ -143,6 +154,8 @@ public sealed class CliOptions
             OutputPath = output,
             IncludeExternalCalls = includeExternal,
             Direction = direction,
+            Language = language,
+            Format = format,
         };
     }
 

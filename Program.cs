@@ -1,10 +1,17 @@
-using digen_2.Analysis;
+using digen_2.Analysis.CSharp;
 using digen_2.Cli;
-using digen_2.PlantUml;
+using digen_2.Core;
+using digen_2.Diagrams.PlantUml;
 using Microsoft.Build.Locator;
 
 MSBuildLocator.RegisterDefaults();
 return await RunAsync(args);
+
+// Composition root: register available analyzers/exporters here. Adding a
+// new language (e.g. Java) or diagram format (e.g. Mermaid) means writing an
+// ICodeAnalyzer / IDiagramExporter implementation and adding one line below.
+static IReadOnlyList<ICodeAnalyzer> Analyzers() => [new CSharpAnalyzer()];
+static IReadOnlyList<IDiagramExporter> Exporters() => [new PlantUmlExporter()];
 
 static async Task<int> RunAsync(string[] args)
 {
@@ -27,71 +34,67 @@ static async Task<int> RunAsync(string[] args)
         return 0;
     }
 
-    return await GenerateAsync(options);
-}
+    var analyzers = Analyzers();
+    var analyzer = options.Language is not null
+        ? analyzers.FirstOrDefault(a => string.Equals(a.Id, options.Language, StringComparison.OrdinalIgnoreCase))
+        : analyzers.FirstOrDefault(a => a.CanAnalyze(options.SolutionPath));
 
-static async Task<int> GenerateAsync(CliOptions options)
-{
-    using var workspace = Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace.Create();
-    workspace.RegisterWorkspaceFailedHandler(e =>
+    if (analyzer is null)
     {
-        if (e.Diagnostic.Kind == Microsoft.CodeAnalysis.WorkspaceDiagnosticKind.Failure)
-            Console.Error.WriteLine($"warning: {e.Diagnostic.Message}");
-    });
-
-    Console.Error.WriteLine($"Loading solution: {options.SolutionPath}");
-    var solution = await workspace.OpenSolutionAsync(options.SolutionPath);
-
-    Console.Error.WriteLine($"Resolving target method: {options.TargetMethod}");
-    var resolver = new MethodTargetResolver(solution);
-    var resolution = await resolver.ResolveAsync(options.TargetMethod, options.ParamTypes);
-
-    if (!resolution.Success)
-    {
-        Console.Error.WriteLine(resolution.ErrorMessage);
+        Console.Error.WriteLine(options.Language is not null
+            ? $"Unknown --language '{options.Language}'. Available: {string.Join(", ", analyzers.Select(a => a.Id))}"
+            : $"No analyzer recognizes '{options.SolutionPath}'. Specify one with --language. Available: {string.Join(", ", analyzers.Select(a => a.Id))}");
         return 1;
     }
 
-    List<string> diagrams;
-    if (options.Direction == CallDirection.Incoming)
+    var exporters = Exporters();
+    var exporter = exporters.FirstOrDefault(e => string.Equals(e.Id, options.Format, StringComparison.OrdinalIgnoreCase));
+    if (exporter is null)
     {
-        diagrams = await BuildIncomingDiagramsAsync(solution, resolution.Method!, options);
+        Console.Error.WriteLine(
+            $"Unknown --format '{options.Format}'. Available: {string.Join(", ", exporters.Select(e => e.Id))}");
+        return 1;
     }
-    else
+
+    return await GenerateAsync(options, analyzer, exporter);
+}
+
+static async Task<int> GenerateAsync(CliOptions options, ICodeAnalyzer analyzer, IDiagramExporter exporter)
+{
+    var request = new CallGraphRequest(
+        options.SolutionPath,
+        options.TargetMethod,
+        options.ParamTypes,
+        options.Direction,
+        options.MaxDepth,
+        options.IncludeExternalCalls);
+
+    var result = await analyzer.AnalyzeAsync(request);
+    if (!result.Success)
     {
-        diagrams = [await BuildOutgoingDiagramAsync(solution, resolution.Method!, options)];
+        Console.Error.WriteLine(result.ErrorMessage);
+        return 1;
     }
+
+    List<string> diagrams = options.Direction == CallDirection.Incoming
+        ? RenderIncoming(result.Root!, exporter)
+        : [exporter.RenderOutgoing(result.Root!)];
 
     WriteDiagrams(diagrams, options.OutputPath);
     return 0;
 }
 
-static async Task<string> BuildOutgoingDiagramAsync(
-    Microsoft.CodeAnalysis.Solution solution, Microsoft.CodeAnalysis.IMethodSymbol method, CliOptions options)
+static List<string> RenderIncoming(CallGraphNode root, IDiagramExporter exporter)
 {
-    Console.Error.WriteLine($"Building outgoing call graph (max depth {options.MaxDepth})...");
-    var builder = new CallGraphBuilder(solution, options.MaxDepth, options.IncludeExternalCalls);
-    var root = await builder.BuildAsync(method);
-    return new PlantUmlSequenceWriter().Write(root);
-}
-
-static async Task<List<string>> BuildIncomingDiagramsAsync(
-    Microsoft.CodeAnalysis.Solution solution, Microsoft.CodeAnalysis.IMethodSymbol method, CliOptions options)
-{
-    Console.Error.WriteLine($"Building incoming call hierarchy (max depth {options.MaxDepth})...");
-    var builder = new IncomingCallGraphBuilder(solution, options.MaxDepth);
-    var root = await builder.BuildAsync(method);
-
     var paths = root.EnumeratePaths();
     Console.Error.WriteLine($"Found {paths.Count} call chain(s) reaching the target method.");
 
-    var writer = new PlantUmlIncomingPathWriter();
     var diagrams = new List<string>();
     for (var i = 0; i < paths.Count; i++)
     {
         var chain = paths[i];
         chain.Reverse(); // target-first -> chronological (entry point first)
-        diagrams.Add(writer.Write(chain, i + 1, paths.Count));
+        diagrams.Add(exporter.RenderIncomingPath(chain, i + 1, paths.Count));
     }
 
     return diagrams;

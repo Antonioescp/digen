@@ -1,7 +1,8 @@
+using digen_2.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.FindSymbols;
 
-namespace digen_2.Analysis;
+namespace digen_2.Analysis.CSharp;
 
 /// <summary>
 /// Builds the incoming call hierarchy for a method - "who calls this?" -
@@ -13,15 +14,16 @@ public sealed class IncomingCallGraphBuilder(Solution solution, int maxDepth)
     private const int MaxTotalNodes = 4000;
     private int _nodeCount;
 
-    public async Task<CallerNode> BuildAsync(IMethodSymbol target)
+    public async Task<CallGraphNode> BuildAsync(IMethodSymbol target)
     {
-        var root = new CallerNode(target.OriginalDefinition);
+        var targetDef = target.OriginalDefinition;
+        var root = new CallGraphNode(CallableMethodMapper.Map(targetDef));
         _nodeCount = 1;
 
-        var pathStack = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { root.Method };
-        await ExpandAsync(root, pathStack, depth: 0);
+        var pathStack = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { targetDef };
+        await ExpandAsync(root, targetDef, pathStack, depth: 0);
 
-        if (root.Callers.Count == 0 && root.Note is null)
+        if (root.Children.Count == 0 && root.Note is null)
         {
             root.Note = "no callers found in solution";
         }
@@ -29,7 +31,7 @@ public sealed class IncomingCallGraphBuilder(Solution solution, int maxDepth)
         return root;
     }
 
-    private async Task ExpandAsync(CallerNode node, HashSet<IMethodSymbol> pathStack, int depth)
+    private async Task ExpandAsync(CallGraphNode node, IMethodSymbol method, HashSet<IMethodSymbol> pathStack, int depth)
     {
         if (depth >= maxDepth)
         {
@@ -37,7 +39,7 @@ public sealed class IncomingCallGraphBuilder(Solution solution, int maxDepth)
             return;
         }
 
-        var callerInfos = await SymbolFinder.FindCallersAsync(node.Method, solution);
+        var callerInfos = await SymbolFinder.FindCallersAsync(method, solution);
 
         var callers = callerInfos
             .Select(c => c.CallingSymbol)
@@ -55,8 +57,8 @@ public sealed class IncomingCallGraphBuilder(Solution solution, int maxDepth)
                 return;
             }
 
-            var child = new CallerNode(caller);
-            node.Callers.Add(child);
+            var child = new CallGraphNode(CallableMethodMapper.Map(caller));
+            node.Children.Add(child);
             _nodeCount++;
 
             if (pathStack.Contains(caller))
@@ -66,7 +68,7 @@ public sealed class IncomingCallGraphBuilder(Solution solution, int maxDepth)
             }
 
             pathStack.Add(caller);
-            await ExpandAsync(child, pathStack, depth + 1);
+            await ExpandAsync(child, caller, pathStack, depth + 1);
             pathStack.Remove(caller);
         }
     }

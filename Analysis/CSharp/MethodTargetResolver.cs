@@ -1,6 +1,6 @@
 using Microsoft.CodeAnalysis;
 
-namespace digen_2.Analysis;
+namespace digen_2.Analysis.CSharp;
 
 public sealed class MethodResolutionResult
 {

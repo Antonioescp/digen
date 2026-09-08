@@ -1,13 +1,14 @@
+using digen_2.Core;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.FindSymbols;
 
-namespace digen_2.Analysis;
+namespace digen_2.Analysis.CSharp;
 
 /// <summary>
 /// Walks method bodies via the Roslyn semantic model, starting from a root
-/// method, building a tree of InvocationNode call edges.
+/// method, building a tree of outgoing calls (CallGraphNode).
 /// </summary>
 public sealed class CallGraphBuilder(Solution solution, int maxDepth, bool includeExternalCalls)
 {
@@ -16,17 +17,17 @@ public sealed class CallGraphBuilder(Solution solution, int maxDepth, bool inclu
     private readonly Dictionary<SyntaxTree, SemanticModel> _semanticModels = new();
     private int _nodeCount;
 
-    public async Task<InvocationNode> BuildAsync(IMethodSymbol root)
+    public async Task<CallGraphNode> BuildAsync(IMethodSymbol root)
     {
-        var rootNode = new InvocationNode(root, null) { HasSource = root.DeclaringSyntaxReferences.Length > 0 };
+        var rootNode = new CallGraphNode(CallableMethodMapper.Map(root));
         _nodeCount = 1;
 
         var ancestors = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { root };
-        await ExpandAsync(rootNode, ancestors, depth: 0);
+        await ExpandAsync(rootNode, root, ancestors, depth: 0);
         return rootNode;
     }
 
-    private async Task ExpandAsync(InvocationNode node, HashSet<IMethodSymbol> ancestors, int depth)
+    private async Task ExpandAsync(CallGraphNode node, IMethodSymbol method, HashSet<IMethodSymbol> ancestors, int depth)
     {
         if (depth >= maxDepth)
         {
@@ -34,15 +35,12 @@ public sealed class CallGraphBuilder(Solution solution, int maxDepth, bool inclu
             return;
         }
 
-        var method = node.Callee;
         var declSyntaxRef = method.DeclaringSyntaxReferences.FirstOrDefault();
         if (declSyntaxRef is null)
         {
             // No source available (BCL, NuGet package, abstract member with no body, etc.)
             return;
         }
-
-        node.HasSource = true;
 
         var declSyntax = await declSyntaxRef.GetSyntaxAsync();
         var semanticModel = await GetSemanticModelAsync(declSyntax.SyntaxTree);
@@ -70,26 +68,25 @@ public sealed class CallGraphBuilder(Solution solution, int maxDepth, bool inclu
             {
                 // No source and caller asked to omit such leaves entirely.
                 if (!includeExternalCalls) continue;
-                var leaf = new InvocationNode(calleeSymbol, method) { HasSource = false, Note = resolved.Note };
+                var leaf = new CallGraphNode(CallableMethodMapper.Map(calleeSymbol)) { Note = resolved.Note };
                 node.Children.Add(leaf);
                 _nodeCount++;
                 continue;
             }
 
             var target = resolved.Target;
-            var child = new InvocationNode(target, method) { Note = resolved.Note };
+            var child = new CallGraphNode(CallableMethodMapper.Map(target)) { Note = resolved.Note };
             node.Children.Add(child);
             _nodeCount++;
 
             if (ancestors.Contains(target))
             {
                 child.Note = string.IsNullOrEmpty(child.Note) ? "recursive call" : child.Note + "; recursive call";
-                child.HasSource = target.DeclaringSyntaxReferences.Length > 0;
                 continue;
             }
 
             ancestors.Add(target);
-            await ExpandAsync(child, ancestors, depth + 1);
+            await ExpandAsync(child, target, ancestors, depth + 1);
             ancestors.Remove(target);
         }
     }
